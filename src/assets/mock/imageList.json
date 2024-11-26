@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "id": "example1",
+      "depth": "/src/assets/images/example1/depth.png",
+      "main": "/src/assets/images/example1/main.jpg",
+      "mask": "/src/assets/images/example1/mask.jpg",
+      "pattern": "/src/assets/images/example1/pattern.jpg",
+      "segment": ""
+    }
+  ]
+}

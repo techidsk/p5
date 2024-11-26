@@ -4,10 +4,12 @@
  * 选中状态和拖拽操作。集成了 immer 用于简化状态更新，使用 persist 实现状态持久化。
  */
 
+import type { CanvasKit, Image, Surface } from "canvaskit-wasm";
+import debounce from "lodash/debounce";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
-import type { CanvasKit, Image, Surface } from "canvaskit-wasm";
+import { applyDisplacement } from "../utils/displacement";
 
 /**
  * 表示画布上的单个图片对象
@@ -111,6 +113,34 @@ interface ImageStore {
   applyDisplacement: (canvasKit: CanvasKit, surface: Surface) => void;
   /** 取消位移贴图 */
   cancelDisplacement: () => void;
+
+  // 新增的方法
+  checkLayerOverlap: (x: number, y: number, rect: DOMRect) => void;
+  onLayerOverlap?: (
+    draggingLayer: ImageObject,
+    targetLayer: ImageObject
+  ) => void;
+  setLayerOverlapHandler: (
+    handler: (dragging: ImageObject, target: ImageObject) => void
+  ) => void;
+
+  // Add these two helper methods to the interface
+  checkOverlap: (topImage: ImageObject, bottomImage: ImageObject) => boolean;
+  checkSizeRatio: (
+    img1: ImageObject,
+    img2: ImageObject,
+    threshold?: number
+  ) => boolean;
+
+  debouncedHandleOverlap: (dragging: ImageObject, target: ImageObject) => void;
+
+  isOverlapping: boolean; // 添加重叠状态追踪
+  onEnterOverlap?: (dragging: ImageObject, target: ImageObject) => void; // 进入重叠回调
+  onLeaveOverlap?: () => void; // 离开重叠回调
+  setOverlapHandlers: (
+    onEnter: (dragging: ImageObject, target: ImageObject) => void,
+    onLeave: () => void
+  ) => void;
 }
 
 /**
@@ -120,7 +150,7 @@ interface ImageStore {
  */
 export const useImageStore = create<ImageStore>()(
   persist(
-    immer((set, get) => ({
+    immer<ImageStore>((set, get) => ({
       images: [],
       selectedImage: null,
       dragState: {
@@ -235,20 +265,63 @@ export const useImageStore = create<ImageStore>()(
 
       handleDrag: (x, y, rect) => {
         const state = get();
-        if (state.dragState.isDragging && state.selectedImage) {
-          set((state) => {
-            const deltaX = x - rect.left - state.dragState.startX;
-            const deltaY = y - rect.top - state.dragState.startY;
-            const imageIndex = state.images.findIndex(
-              (img) => img.id === state.selectedImage!.id
-            );
-            if (imageIndex !== -1) {
-              state.images[imageIndex].x = state.dragState.offsetX + deltaX;
-              state.images[imageIndex].y = state.dragState.offsetY + deltaY;
-              state.selectedImage = state.images[imageIndex];
+        if (!state.dragState.isDragging || !state.selectedImage) return;
+
+        // 计算新位置
+        const newX =
+          state.dragState.offsetX + (x - rect.left - state.dragState.startX);
+        const newY =
+          state.dragState.offsetY + (y - rect.top - state.dragState.startY);
+
+        // 先创建更新后的图层对象
+        const updatedDraggingImage = {
+          ...state.selectedImage,
+          x: newX,
+          y: newY,
+        };
+
+        // 检查重叠（使用更新后的位置）
+        for (let i = state.images.length - 1; i >= 0; i--) {
+          const targetImage = state.images[i];
+          if (targetImage.id === updatedDraggingImage.id) continue;
+
+          if (
+            state.checkOverlap(updatedDraggingImage, targetImage) &&
+            state.checkSizeRatio(updatedDraggingImage, targetImage)
+          ) {
+            // 如果之前不是重叠状态，触发进入重叠事件
+            if (!state.isOverlapping && state.onEnterOverlap) {
+              state.onEnterOverlap(updatedDraggingImage, targetImage);
             }
-          });
+            set((state) => {
+              state.isOverlapping = true;
+              // 更新图层位置
+              state.images = state.images.map((img) => {
+                if (img.id === state.selectedImage?.id) {
+                  return updatedDraggingImage;
+                }
+                return img;
+              });
+            });
+            return;
+          }
         }
+
+        // 如果没有重叠
+        set((state) => {
+          // 如果之前是重叠状态，现在不重叠了，触发离开重叠事件
+          if (state.isOverlapping && state.onLeaveOverlap) {
+            state.onLeaveOverlap();
+          }
+          state.isOverlapping = false;
+          // 更新图层位置
+          state.images = state.images.map((img) => {
+            if (img.id === state.selectedImage?.id) {
+              return updatedDraggingImage;
+            }
+            return img;
+          });
+        });
       },
 
       stopDragging: () => {
@@ -266,10 +339,7 @@ export const useImageStore = create<ImageStore>()(
       startDisplacement: (sourceId, dispImage) => {
         set((state) => {
           // 添加位移贴图作为临时图层
-          state.addImage(dispImage, "displacement-map-temp", {
-            blendMode: "normal",
-            opacity: 1,
-          });
+          state.addImage(dispImage, "displacement-map-temp");
 
           state.displacementState = {
             sourceId,
@@ -349,6 +419,103 @@ export const useImageStore = create<ImageStore>()(
           };
         });
       },
+
+      // 检查重叠的辅助函数
+      checkOverlap: (topImage: ImageObject, bottomImage: ImageObject) => {
+        // 计算顶部图层的中心点
+        const centerX =
+          topImage.x + (topImage.image.width() * topImage.scale) / 2;
+        const centerY =
+          topImage.y + (topImage.image.height() * topImage.scale) / 2;
+
+        // 计算底部图层的边界
+        const bottomRect = {
+          left: bottomImage.x,
+          right: bottomImage.x + bottomImage.image.width() * bottomImage.scale,
+          top: bottomImage.y,
+          bottom:
+            bottomImage.y + bottomImage.image.height() * bottomImage.scale,
+        };
+
+        // 检查中心点是否在底部图层范围内
+        return (
+          centerX >= bottomRect.left &&
+          centerX <= bottomRect.right &&
+          centerY >= bottomRect.top &&
+          centerY <= bottomRect.bottom
+        );
+      },
+
+      // 检查尺寸比例
+      checkSizeRatio: (
+        img1: ImageObject,
+        img2: ImageObject,
+        threshold: number = 1.5
+      ) => {
+        const area1 = img1.image.width() * img1.image.height();
+        const area2 = img2.image.width() * img2.image.height();
+        return area1 <= area2 * threshold;
+      },
+
+      // 设置重叠处理函数
+      setLayerOverlapHandler: (handler) => {
+        set({ onLayerOverlap: handler });
+      },
+
+      // 使用 lodash 的 debounce 实现
+      debouncedHandleOverlap: debounce(
+        (dragging: ImageObject, target: ImageObject) => {
+          console.log("debouncedHandleOverlap", dragging, target);
+          const state = get();
+          if (state.onLayerOverlap) {
+            state.onLayerOverlap(dragging, target);
+          }
+        },
+        100
+      ),
+
+      checkLayerOverlap: (x: number, y: number, rect: DOMRect) => {
+        const state = get();
+        if (!state.selectedImage) return;
+
+        // 从后往前遍历，找到第一个符合条件的图层
+        for (let i = state.images.length - 1; i >= 0; i--) {
+          const targetImage = state.images[i];
+          if (targetImage.id === state.selectedImage.id) continue;
+
+          const draggingImage = state.selectedImage;
+          if (
+            state.checkOverlap(draggingImage, targetImage) &&
+            state.checkSizeRatio(draggingImage, targetImage)
+          ) {
+            // 如果之前不是重叠状态，触发进入重叠事件
+            if (!state.isOverlapping && state.onEnterOverlap) {
+              state.onEnterOverlap(draggingImage, targetImage);
+            }
+            set({ isOverlapping: true });
+            return;
+          }
+        }
+
+        // 如果之前是重叠状态，现在不重叠了，触发离开重叠事件
+        if (state.isOverlapping && state.onLeaveOverlap) {
+          state.onLeaveOverlap();
+        }
+        set({ isOverlapping: false });
+      },
+
+      isOverlapping: false,
+
+      // 设置重叠处理函数
+      setOverlapHandlers: (
+        onEnter: (dragging: ImageObject, target: ImageObject) => void,
+        onLeave: () => void
+      ) => {
+        set({
+          onEnterOverlap: onEnter,
+          onLeaveOverlap: onLeave,
+        });
+      },
     })),
     {
       name: "image-storage",
@@ -368,6 +535,7 @@ export const useImageStore = create<ImageStore>()(
             blendMode,
           })
         ),
+        isOverlapping: false,
       }),
     }
   )

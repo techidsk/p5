@@ -12,6 +12,8 @@ interface LayerPanelProps {
   onBlendModeChange: (id: string, blendMode: BlendMode) => void;
   onResetImage: (id: string) => void;
   onOpacityChange: (id: string, opacity: number) => void;
+  onCreateMockup?: (imageId: string) => void;
+  onLoadMockup?: (imageId: string) => void;
 }
 
 export function LayerPanel({
@@ -24,6 +26,8 @@ export function LayerPanel({
   onBlendModeChange,
   onResetImage,
   onOpacityChange,
+  onCreateMockup,
+  onLoadMockup,
 }: LayerPanelProps) {
   const displacementInputRef = useRef<HTMLInputElement>(null);
 
@@ -85,7 +89,7 @@ export function LayerPanel({
           const file = e.target.files?.[0];
           if (file && selectedImage) {
             onApplyDisplacement(selectedImage);
-            e.target.value = '';
+            e.target.value = "";
           }
         }}
       />
@@ -106,6 +110,25 @@ export function LayerPanel({
             onOpacityChange={(opacity) => onOpacityChange(img.id, opacity)}
           />
         ))}
+      </div>
+
+      <div className="flex gap-2 mt-2">
+        {onCreateMockup && selectedImage && (
+          <button
+            className="text-sm text-blue-500 hover:text-blue-700"
+            onClick={() => onCreateMockup(selectedImage)}
+          >
+            创建模板
+          </button>
+        )}
+        {onLoadMockup && selectedImage && (
+          <button
+            className="text-sm text-green-500 hover:text-green-700"
+            onClick={() => onLoadMockup(selectedImage)}
+          >
+            加载模板
+          </button>
+        )}
       </div>
     </div>
   );

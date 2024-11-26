@@ -1,17 +1,13 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import type {
-  BlendMode,
-  BlendModeEnumValues,
-  CanvasKit,
-  EmbindEnumEntity,
-  Surface,
-} from "canvaskit-wasm";
+import type { EmbindEnumEntity } from "canvaskit-wasm";
+import { useCallback, useEffect, useRef } from "react";
 import { LayerPanel } from "../components/LayerPanel";
 import { applyDisplacement } from "../utils/displacement";
 
-import { useImageStore } from "../store/imageStore";
+import imageList from "../assets/mock/imageList.json";
 import { BLEND_MODES } from "../components/LayerItem";
 import { useCanvasKitStore } from "../store/canvasKitStore";
+import { ImageObject, useImageStore } from "../store/imageStore";
+import { useMockupStore } from "../store/mockupStore";
 
 export default function SkiaPage() {
   const CANVAS_ID = "main-canvas";
@@ -47,6 +43,9 @@ export default function SkiaPage() {
     stopDragging,
     clearSelection,
   } = useImageStore();
+
+  const { loadMockupById, saveMockupData, currentMockup, isLoading } =
+    useMockupStore();
 
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -171,8 +170,11 @@ export default function SkiaPage() {
 
       // 设置混合模式
       if (img.blendMode) {
-        const blendModeName = BLEND_MODES[img.blendMode as keyof typeof BLEND_MODES];
-        const blendMode = canvasKit.BlendMode[blendModeName] as EmbindEnumEntity;
+        const blendModeName =
+          BLEND_MODES[img.blendMode as keyof typeof BLEND_MODES];
+        const blendMode = canvasKit.BlendMode[
+          blendModeName
+        ] as EmbindEnumEntity;
         paint.setBlendMode(blendMode);
       } else {
         paint.setBlendMode(canvasKit.BlendMode.SrcOver);
@@ -288,6 +290,68 @@ export default function SkiaPage() {
     updateImageContent(imageId, { blendMode });
   };
 
+  const handleLoadExample = async () => {
+    const canvasKit = getCanvasKit();
+    if (!canvasKit) {
+      console.error("CanvasKit not ready");
+      return;
+    }
+
+    try {
+      const example = imageList.images[0];
+
+      // 先保存到 mockupStore
+      saveMockupData(example.id, {
+        main: example.main,
+        depth: example.depth,
+        mask: example.mask,
+        segment: example.segment,
+        pattern: example.pattern,
+        name: `示例 Mockup ${example.id}`,
+      });
+
+      // 加载主图片
+      const response = await fetch(example.main);
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+      const mainImage = canvasKit.MakeImageFromEncoded(
+        new Uint8Array(arrayBuffer)
+      );
+
+      if (!mainImage) {
+        throw new Error("Failed to load main image");
+      }
+
+      // 添加到画布
+      addImage(mainImage, `${example.id}-main`);
+
+      // 同时保存到 mockupStore
+      await loadMockupById(example.id, canvasKit);
+    } catch (error) {
+      console.error("Failed to load example:", error);
+    }
+  };
+
+  // 加载已存在的 mockup
+  const handleLoadMockup = async (imageId: string) => {
+    console.log("加载 mockup", imageId);
+    const canvasKit = getCanvasKit();
+    if (!canvasKit) {
+      console.error("CanvasKit not ready");
+      return;
+    }
+
+    try {
+      await loadMockupById(imageId, canvasKit);
+
+      if (currentMockup?.mainImage) {
+        addImage(currentMockup.mainImage, imageId);
+      }
+    } catch (error) {
+      console.error("Failed to load mockup:", error);
+    }
+  };
+
   // 初始化 CanvasKit 和 Surface
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -335,7 +399,7 @@ export default function SkiaPage() {
 
     const wheelHandler = (e: WheelEvent) => {
       e.preventDefault();
-      
+
       // 获取鼠标在画布上的位置
       const rect = canvas.getBoundingClientRect();
       const clientX = e.clientX - rect.left;
@@ -343,18 +407,47 @@ export default function SkiaPage() {
 
       handleWheelStore(
         e.deltaY,
-        e.ctrlKey,  // 检测是否按下 Ctrl 键
+        e.ctrlKey, // 检测是否按下 Ctrl 键
         clientX,
         clientY
       );
     };
 
-    canvas.addEventListener('wheel', wheelHandler, { passive: false });
+    canvas.addEventListener("wheel", wheelHandler, { passive: false });
 
     return () => {
-      canvas.removeEventListener('wheel', wheelHandler);
+      canvas.removeEventListener("wheel", wheelHandler);
     };
   }, [handleWheelStore]);
+
+  // 添加重叠状态处理函数
+  useEffect(() => {
+    const handleEnterOverlap = (dragging: ImageObject, target: ImageObject) => {
+      console.log("✨ 进入重叠状态:", {
+        dragging: dragging.name,
+        target: target.name,
+        position: { x: dragging.x, y: dragging.y },
+      });
+      // TODO: 这里可以添加进入重叠时的业务逻辑
+    };
+
+    const handleLeaveOverlap = () => {
+      console.log("🚫 离开重叠状态");
+      // TODO: 这里可以添加离开重叠时的业务逻辑
+    };
+
+    useImageStore
+      .getState()
+      .setOverlapHandlers(handleEnterOverlap, handleLeaveOverlap);
+
+    // 清理函数
+    return () => {
+      useImageStore.getState().setOverlapHandlers(
+        () => {},
+        () => {}
+      );
+    };
+  }, []);
 
   return (
     <div className="p-8 relative flex">
@@ -363,6 +456,12 @@ export default function SkiaPage() {
         <div className="flex flex-col items-center justify-center relative z-20 pointer-events-none">
           <div className="pointer-events-auto">
             <h1 className="text-2xl font-bold mb-4">Skia 演示</h1>
+            <button
+              className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mr-2"
+              onClick={handleLoadExample}
+            >
+              加载示例
+            </button>
           </div>
         </div>
         <canvas
@@ -400,6 +499,18 @@ export default function SkiaPage() {
         onOpacityChange={(id: string, opacity: number) => {
           updateImageContent(id, { opacity });
         }}
+        onCreateMockup={(imageId: string) => {
+          // 当用户在图层面板中点击创建 mockup 时
+          console.log("创建 mockup", imageId);
+          saveMockupData(imageId, {
+            main: `/mockups/${imageId}/main.jpg`, // 这里需要根据实际情况设置路径
+            depth: `/mockups/${imageId}/depth.png`,
+            mask: `/mockups/${imageId}/mask.png`,
+            segment: `/mockups/${imageId}/segment.png`,
+            name: `Mockup ${imageId}`,
+          });
+        }}
+        onLoadMockup={handleLoadMockup}
       />
 
       {/* 隐藏的文件输入 */}
