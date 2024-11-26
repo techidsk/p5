@@ -42,7 +42,7 @@ interface CanvasKitStore {
   startPanning: (x: number, y: number) => void;
   updatePanning: (x: number, y: number) => void;
   stopPanning: () => void;
-  handleWheel: (deltaY: number) => void;
+  handleWheel: (deltaY: number, isCtrlPressed: boolean, clientX: number, clientY: number) => void;
 }
 
 export const useCanvasKitStore = create<CanvasKitStore>()(
@@ -210,9 +210,26 @@ export const useCanvasKitStore = create<CanvasKitStore>()(
       });
     },
 
-    handleWheel: (deltaY) => {
+    handleWheel: (deltaY: number, isCtrlPressed: boolean, clientX: number, clientY: number) => {
       set(state => {
-        state.transform.y -= deltaY;
+        if (isCtrlPressed) {
+          // 缩放因子：deltaY 为正时缩小，为负时放大
+          const scaleFactor = 1 - deltaY * 0.001;
+          const oldScale = state.transform.scale;
+          const newScale = Math.max(0.1, Math.min(10, oldScale * scaleFactor)); // 限制缩放范围
+
+          // 计算鼠标位置相对于画布原点的偏移
+          const mouseX = clientX - state.transform.x;
+          const mouseY = clientY - state.transform.y;
+
+          // 更新缩放和位置，保持鼠标指向的点不变
+          state.transform.scale = newScale;
+          state.transform.x += mouseX - (mouseX * newScale / oldScale);
+          state.transform.y += mouseY - (mouseY * newScale / oldScale);
+        } else {
+          // 普通的平移
+          state.transform.y -= deltaY;
+        }
       });
     },
   }))

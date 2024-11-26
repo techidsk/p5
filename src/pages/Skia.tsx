@@ -150,17 +150,17 @@ export default function SkiaPage() {
   }, [resizeSurface, getActiveSurface, images, getCanvasKit]);
 
   const drawImages = useCallback(() => {
-    console.log("Drawing images:", images);
     const surface = getActiveSurface();
     const canvasKit = getCanvasKit();
-    console.log("Drawing images:", { surface, canvasKit });
-    if (!surface || !canvasKit) {
-      console.log("Missing surface or canvasKit:", { surface, canvasKit });
-      return;
-    }
+    if (!surface || !canvasKit) return;
 
     const canvas = surface.getCanvas();
     canvas.clear(canvasKit.TRANSPARENT);
+
+    // 应用画布变换
+    canvas.save();
+    canvas.translate(transform.x, transform.y);
+    canvas.scale(transform.scale, transform.scale);
 
     images.forEach((img) => {
       canvas.save();
@@ -171,27 +171,20 @@ export default function SkiaPage() {
 
       // 设置混合模式
       if (img.blendMode) {
-        const blendModeName =
-          BLEND_MODES[img.blendMode as keyof typeof BLEND_MODES];
-        const blendMode = canvasKit.BlendMode[
-          blendModeName
-        ] as EmbindEnumEntity;
+        const blendModeName = BLEND_MODES[img.blendMode as keyof typeof BLEND_MODES];
+        const blendMode = canvasKit.BlendMode[blendModeName] as EmbindEnumEntity;
         paint.setBlendMode(blendMode);
       } else {
         paint.setBlendMode(canvasKit.BlendMode.SrcOver);
       }
 
-      // 应用变换
-      canvas.translate(transform.x, transform.y);
-      canvas.scale(transform.scale, transform.scale);
-      canvas.rotate(img.rotation, 0, 0);
-
-      // 使用 paint 绘制图像
-      canvas.drawImage(img.image, 0, 0, paint);
+      // 绘制图像
+      canvas.drawImage(img.image, img.x, img.y, paint);
       paint.delete();
       canvas.restore();
     });
 
+    canvas.restore();
     surface.flush();
   }, [getActiveSurface, getCanvasKit, images, transform]);
 
@@ -340,17 +333,26 @@ export default function SkiaPage() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // 添加非被动的 wheel 事件监听器
     const wheelHandler = (e: WheelEvent) => {
       e.preventDefault();
-      handleWheelStore(e.deltaY);
+      
+      // 获取鼠标在画布上的位置
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.clientX - rect.left;
+      const clientY = e.clientY - rect.top;
+
+      handleWheelStore(
+        e.deltaY,
+        e.ctrlKey,  // 检测是否按下 Ctrl 键
+        clientX,
+        clientY
+      );
     };
 
-    canvas.addEventListener("wheel", wheelHandler, { passive: false });
+    canvas.addEventListener('wheel', wheelHandler, { passive: false });
 
-    // 清理函数
     return () => {
-      canvas.removeEventListener("wheel", wheelHandler);
+      canvas.removeEventListener('wheel', wheelHandler);
     };
   }, [handleWheelStore]);
 
