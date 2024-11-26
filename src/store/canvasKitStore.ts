@@ -13,12 +13,21 @@ const instances = {
   activeSurfaceId: null as string | null,
 };
 
+interface CanvasTransform {
+  x: number;
+  y: number;
+  scale: number;
+}
+
 interface CanvasKitStore {
   // 状态
   activeSurfaceId: string | null;
   isInitialized: boolean;
   isLoading: boolean;
   error: Error | null;
+  transform: CanvasTransform;
+  isPanning: boolean;
+  lastPanPosition: { x: number; y: number };
 
   // Actions
   initialize: (canvasKit: CanvasKit) => void;
@@ -29,6 +38,11 @@ interface CanvasKitStore {
   resizeSurface: (id: string) => void;
   getActiveSurface: () => Surface | null;
   getCanvasKit: () => CanvasKit | null;
+  updateTransform: (transform: Partial<CanvasTransform>) => void;
+  startPanning: (x: number, y: number) => void;
+  updatePanning: (x: number, y: number) => void;
+  stopPanning: () => void;
+  handleWheel: (deltaY: number) => void;
 }
 
 export const useCanvasKitStore = create<CanvasKitStore>()(
@@ -38,6 +52,9 @@ export const useCanvasKitStore = create<CanvasKitStore>()(
     isInitialized: false,
     isLoading: false,
     error: null,
+    transform: { x: 0, y: 0, scale: 1 },
+    isPanning: false,
+    lastPanPosition: { x: 0, y: 0 },
 
     // 初始化 CanvasKit
     initialize: (canvasKit: CanvasKit) => {
@@ -159,6 +176,44 @@ export const useCanvasKitStore = create<CanvasKitStore>()(
     // 获取 CanvasKit 实例
     getCanvasKit: () => {
       return instances.canvasKit;
+    },
+
+    // 新增 actions
+    updateTransform: (newTransform) => {
+      set(state => {
+        Object.assign(state.transform, newTransform);
+      });
+    },
+
+    startPanning: (x, y) => {
+      set(state => {
+        state.isPanning = true;
+        state.lastPanPosition = { x, y };
+      });
+    },
+
+    updatePanning: (x, y) => {
+      set(state => {
+        if (state.isPanning) {
+          const dx = x - state.lastPanPosition.x;
+          const dy = y - state.lastPanPosition.y;
+          state.transform.x += dx;
+          state.transform.y += dy;
+          state.lastPanPosition = { x, y };
+        }
+      });
+    },
+
+    stopPanning: () => {
+      set(state => {
+        state.isPanning = false;
+      });
+    },
+
+    handleWheel: (deltaY) => {
+      set(state => {
+        state.transform.y -= deltaY;
+      });
     },
   }))
 );

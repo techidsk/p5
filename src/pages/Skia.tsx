@@ -25,6 +25,12 @@ export default function SkiaPage() {
     getActiveSurface,
     getCanvasKit,
     cleanup,
+    transform,
+    isPanning,
+    startPanning,
+    updatePanning,
+    stopPanning,
+    handleWheel: handleWheelStore,
   } = useCanvasKitStore();
 
   const {
@@ -41,29 +47,6 @@ export default function SkiaPage() {
     stopDragging,
     clearSelection,
   } = useImageStore();
-
-  // Simplified mouse event handlers using store functions
-  const handleMouseDown = (e: React.MouseEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    const hit = handleImageClick(e.clientX, e.clientY, rect);
-    if (hit) {
-      startDragging(e.clientX, e.clientY, rect);
-    } else {
-      clearSelection();
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    handleDrag(e.clientX, e.clientY, rect);
-  };
-
-  const handleMouseUp = () => {
-    stopDragging();
-  };
 
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -84,30 +67,70 @@ export default function SkiaPage() {
     }
   };
 
+  // Simplified mouse event handlers using store functions
+  const handleMouseDown = (e: React.MouseEvent) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    if (e.button === 1) {
+      startPanning(e.clientX, e.clientY);
+      return;
+    }
+
+    const adjustedX = (e.clientX - rect.left - transform.x) / transform.scale;
+    const adjustedY = (e.clientY - rect.top - transform.y) / transform.scale;
+
+    const hit = handleImageClick(adjustedX, adjustedY, rect);
+    if (hit) {
+      startDragging(adjustedX, adjustedY, rect);
+    } else {
+      clearSelection();
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    if (isPanning) {
+      updatePanning(e.clientX, e.clientY);
+      return;
+    }
+
+    const adjustedX = (e.clientX - rect.left - transform.x) / transform.scale;
+    const adjustedY = (e.clientY - rect.top - transform.y) / transform.scale;
+    handleDrag(adjustedX, adjustedY, rect);
+  };
+
+  const handleMouseUp = () => {
+    stopPanning();
+    stopDragging();
+  };
+
   const handleResize = useCallback(() => {
     if (canvasRef.current) {
       const width = window.innerWidth;
       const height = window.innerHeight;
-      
+
       const canvasKit = getCanvasKit();
       if (!canvasKit) return;
-      
+
       // 更新 canvas 尺寸
       canvasRef.current.width = width;
       canvasRef.current.height = height;
-      
+
       // 调整 surface 尺寸
       resizeSurface(CANVAS_ID);
-      
+
       // 重新渲染画布内容
       const surface = getActiveSurface();
       if (surface) {
         const canvas = surface.getCanvas();
         // 使用 canvasKit 实例而不是类型
         canvas.clear(canvasKit.TRANSPARENT);
-        
+
         // 重新绘制所有图片
-        images.forEach(img => {
+        images.forEach((img) => {
           // 保存当前变换状态
           canvas.save();
           // 应用图片的变换
@@ -119,7 +142,7 @@ export default function SkiaPage() {
           // 恢复变换状态
           canvas.restore();
         });
-        
+
         // 刷新画布
         surface.flush();
       }
@@ -159,8 +182,8 @@ export default function SkiaPage() {
       }
 
       // 应用变换
-      canvas.translate(img.x, img.y);
-      canvas.scale(img.scale, img.scale);
+      canvas.translate(transform.x, transform.y);
+      canvas.scale(transform.scale, transform.scale);
       canvas.rotate(img.rotation, 0, 0);
 
       // 使用 paint 绘制图像
@@ -170,7 +193,7 @@ export default function SkiaPage() {
     });
 
     surface.flush();
-  }, [getActiveSurface, getCanvasKit, images]);
+  }, [getActiveSurface, getCanvasKit, images, transform]);
 
   const handleApplyDisplacement = async (sourceId: string) => {
     if (!getCanvasKit() || !getActiveSurface()) {
@@ -312,6 +335,24 @@ export default function SkiaPage() {
   useEffect(() => {
     drawImages();
   }, [images, drawImages]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // 添加非被动的 wheel 事件监听器
+    const wheelHandler = (e: WheelEvent) => {
+      e.preventDefault();
+      handleWheelStore(e.deltaY);
+    };
+
+    canvas.addEventListener("wheel", wheelHandler, { passive: false });
+
+    // 清理函数
+    return () => {
+      canvas.removeEventListener("wheel", wheelHandler);
+    };
+  }, [handleWheelStore]);
 
   return (
     <div className="p-8 relative flex">
