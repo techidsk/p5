@@ -136,11 +136,17 @@ interface ImageStore {
 
   isOverlapping: boolean; // 添加重叠状态追踪
   onEnterOverlap?: (dragging: ImageObject, target: ImageObject) => void; // 进入重叠回调
+  onDragInOverlap?: (dragging: ImageObject, target: ImageObject) => void; // 新增
   onLeaveOverlap?: () => void; // 离开重叠回调
   setOverlapHandlers: (
     onEnter: (dragging: ImageObject, target: ImageObject) => void,
+    onDragIn: (dragging: ImageObject, target: ImageObject) => void, // 新增
     onLeave: () => void
   ) => void;
+
+  clearAllImages: () => void;
+
+  findTopImageAtPoint: (x: number, y: number) => ImageObject | undefined;
 }
 
 /**
@@ -289,9 +295,11 @@ export const useImageStore = create<ImageStore>()(
             state.checkOverlap(updatedDraggingImage, targetImage) &&
             state.checkSizeRatio(updatedDraggingImage, targetImage)
           ) {
-            // 如果之前不是重叠状态，触发进入重叠事件
             if (!state.isOverlapping && state.onEnterOverlap) {
               state.onEnterOverlap(updatedDraggingImage, targetImage);
+            } else if (state.isOverlapping && state.onDragInOverlap) {
+              // 在重叠状态下拖拽时触发
+              state.onDragInOverlap(updatedDraggingImage, targetImage);
             }
             set((state) => {
               state.isOverlapping = true;
@@ -509,12 +517,52 @@ export const useImageStore = create<ImageStore>()(
       // 设置重叠处理函数
       setOverlapHandlers: (
         onEnter: (dragging: ImageObject, target: ImageObject) => void,
+        onDragIn: (dragging: ImageObject, target: ImageObject) => void,
         onLeave: () => void
       ) => {
         set({
           onEnterOverlap: onEnter,
+          onDragInOverlap: onDragIn,
           onLeaveOverlap: onLeave,
         });
+      },
+
+      clearAllImages: () => {
+        set((state) => {
+          state.images = [];
+          state.selectedImage = null;
+          state.isOverlapping = false;
+          // Reset any other relevant state
+          if (state.displacementState.dispImage) {
+            state.displacementState = {
+              sourceId: null,
+              dispImage: null,
+              maskImage: null,
+            };
+          }
+        });
+      },
+
+      findTopImageAtPoint: (x: number, y: number): ImageObject | undefined => {
+        const { images } = get();
+        // 从后向前遍历，找到第一个命中的图像
+        for (let i = images.length - 1; i >= 0; i--) {
+          const img = images[i];
+          if (!img.image) continue;
+          
+          const width = img.image.width() * (img.scale || 1);
+          const height = img.image.height() * (img.scale || 1);
+          
+          if (
+            x >= img.x &&
+            x <= img.x + width &&
+            y >= img.y &&
+            y <= img.y + height
+          ) {
+            return img;
+          }
+        }
+        return undefined;
       },
     })),
     {

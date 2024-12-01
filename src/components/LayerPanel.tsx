@@ -1,135 +1,149 @@
-import { LayerItem, BlendMode } from "./LayerItem";
+import { useImageStore } from "../store/imageStore";
+import { useCanvasKitStore } from "../store/canvasKitStore";
+import { uploadImage } from "../utils/imageOperations";
 import { useRef } from "react";
-import type { ImageObject } from "../store/imageStore";
+import { Plus, Trash2, RotateCcw } from "lucide-react";
+import { BLEND_MODES, BlendModeName } from "../types/image";
 
-interface LayerPanelProps {
-  images: ImageObject[];
-  selectedImage: string | null;
-  onSelectImage: (id: string) => void;
-  onDeleteImage: (id: string) => void;
-  onAddImage: () => void;
-  onApplyDisplacement: (sourceId: string) => void;
-  onBlendModeChange: (id: string, blendMode: BlendMode) => void;
-  onResetImage: (id: string) => void;
-  onOpacityChange: (id: string, opacity: number) => void;
-  onCreateMockup?: (imageId: string) => void;
-  onLoadMockup?: (imageId: string) => void;
-}
+export function LayerPanel() {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { getCanvasKit } = useCanvasKitStore();
 
-export function LayerPanel({
-  images,
-  selectedImage,
-  onSelectImage,
-  onDeleteImage,
-  onAddImage,
-  onApplyDisplacement,
-  onBlendModeChange,
-  onResetImage,
-  onOpacityChange,
-  onCreateMockup,
-  onLoadMockup,
-}: LayerPanelProps) {
-  const displacementInputRef = useRef<HTMLInputElement>(null);
+  const {
+    images,
+    selectedImage,
+    addImage,
+    selectImage,
+    deleteImage,
+    updateImageContent,
+    clearAllImages,
+  } = useImageStore();
+
+  const handleFileUpload = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const canvasKit = getCanvasKit();
+    if (!canvasKit || !event.target.files?.[0]) return;
+
+    try {
+      const { image, id } = await uploadImage(event.target.files[0], canvasKit);
+      addImage(image, event.target.files[0].name);
+    } catch (error) {
+      console.error("Failed to upload image:", error);
+    }
+  };
 
   return (
     <div className="w-128 bg-white shadow-lg p-4 fixed right-0 top-0 h-screen overflow-y-auto">
       <div className="flex justify-between items-center mb-4">
-        <h2 className="font-bold text-lg">图层</h2>
+        <h2 className="font-bold text-gray-800 text-lg">图层</h2>
         <div className="flex gap-2">
           <button
-            className="text-gray-600 hover:text-gray-800"
-            onClick={onAddImage}
+            className="bg-gray-600 hover:bg-gray-800"
+            onClick={clearAllImages}
+            title="清除所有图层"
           >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 4v16m8-8H4"
-              />
-            </svg>
+            <Trash2 className="w-5 h-5 text-gray-100" />
           </button>
-          {selectedImage && (
-            <button
-              className="text-gray-600 hover:text-gray-800"
-              onClick={() => {
-                displacementInputRef.current?.click();
-              }}
-              title="应用置换效果"
-            >
-              <svg
-                className="w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M19.5 10c-2.483 0-4.5 2.017-4.5 4.5s2.017 4.5 4.5 4.5 4.5-2.017 4.5-4.5-2.017-4.5-4.5-4.5zM4 10c-2.483 0-4.5 2.017-4.5 4.5S1.517 19 4 19s4.5-2.017 4.5-4.5S6.483 10 4 10zm7.5-5C8.967 5 7 7.017 7 9.5S8.967 14 11.5 14s4.5-2.017 4.5-4.5S14.033 5 11.5 5z"
-                />
-              </svg>
-            </button>
-          )}
+          <button
+            className="bg-gray-600 hover:bg-gray-800"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Plus className="w-5 h-5 text-gray-100" />
+          </button>
         </div>
+      </div>
+
+      <div className="space-y-2">
+        {images.map((image) => (
+          <div
+            key={image.id}
+            className={`p-2 border rounded ${
+              selectedImage?.id === image.id
+                ? "border-blue-500"
+                : "border-gray-200"
+            }`}
+            onClick={() => selectImage(image.id)}
+          >
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-800">{image.name}</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      updateImageContent(image.id, {
+                        x: 0,
+                        y: 0,
+                        scale: 1,
+                        rotation: 0,
+                      });
+                    }}
+                    className="text-gray-500 hover:text-gray-700"
+                    title="重置位置和变换"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteImage(image.id);
+                    }}
+                    className="text-red-500 hover:text-red-700"
+                    title="删除图层"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="text-xs text-gray-500 space-y-1">
+                <div className="flex justify-between">
+                  <span>位置:</span>
+                  <span>
+                    X: {Math.round(image.x)}, Y: {Math.round(image.y)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>缩放:</span>
+                  <span>{(image.scale * 100).toFixed(0)}%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>旋转:</span>
+                  <span>{Math.round(image.rotation)}°</span>
+                </div>
+              </div>
+            </div>
+            {selectedImage?.id === image.id && (
+              <div className="mt-2">
+                <select
+                  value={image.blendMode || "SrcOver"}
+                  onChange={(e) =>
+                    updateImageContent(image.id, {
+                      blendMode: e.target.value as BlendModeName,
+                    })
+                  }
+                  className="w-full p-1 border rounded"
+                >
+                  {Object.keys(BLEND_MODES).map((mode) => (
+                    <option key={mode} value={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
 
       <input
         type="file"
         accept="image/*"
-        ref={displacementInputRef}
+        onChange={handleFileUpload}
         className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file && selectedImage) {
-            onApplyDisplacement(selectedImage);
-            e.target.value = "";
-          }
-        }}
+        ref={fileInputRef}
       />
-
-      <div className="space-y-2">
-        {[...images].reverse().map((img, index) => (
-          <LayerItem
-            key={img.id}
-            image={img}
-            index={index + 1}
-            isSelected={selectedImage === img.id}
-            onSelect={() => onSelectImage(img.id)}
-            onDelete={() => onDeleteImage(img.id)}
-            onBlendModeChange={(blendMode) =>
-              onBlendModeChange(img.id, blendMode)
-            }
-            onReset={() => onResetImage(img.id)}
-            onOpacityChange={(opacity) => onOpacityChange(img.id, opacity)}
-          />
-        ))}
-      </div>
-
-      <div className="flex gap-2 mt-2">
-        {onCreateMockup && selectedImage && (
-          <button
-            className="text-sm text-blue-500 hover:text-blue-700"
-            onClick={() => onCreateMockup(selectedImage)}
-          >
-            创建模板
-          </button>
-        )}
-        {onLoadMockup && selectedImage && (
-          <button
-            className="text-sm text-green-500 hover:text-green-700"
-            onClick={() => onLoadMockup(selectedImage)}
-          >
-            加载模板
-          </button>
-        )}
-      </div>
     </div>
   );
 }
