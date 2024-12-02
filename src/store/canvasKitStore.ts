@@ -39,6 +39,21 @@ interface CanvasKitStore {
   getActiveSurface: () => Surface | null;
   getCanvasKit: () => CanvasKit | null;
   updateTransform: (transform: Partial<CanvasTransform>) => void;
+  /**
+   * 开始画布平移操作
+   * @param x - 鼠标按下时的 X 坐标（相对于视口）
+   * @param y - 鼠标按下时的 Y 坐标（相对于视口）
+   * @description 
+   * 1. 记录当前鼠标位置作为平移的起始点
+   * 2. 设置 isPanning 状态为 true，表示开始平移操作
+   * 3. 通常在鼠标按下(mousedown)事件中调用
+   * 
+   * @example
+   * // 在组件中使用
+   * const handleMouseDown = (e: MouseEvent) => {
+   *   startPanning(e.clientX, e.clientY);
+   * };
+   */
   startPanning: (x: number, y: number) => void;
   updatePanning: (x: number, y: number) => void;
   stopPanning: () => void;

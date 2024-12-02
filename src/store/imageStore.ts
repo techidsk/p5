@@ -10,31 +10,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
 import { applyDisplacement } from "../utils/displacement";
-
-/**
- * 表示画布上的单个图片对象
- * @interface ImageObject
- * @property {string} id - 唯一标识符
- * @property {Image} image - CanvasKit 图片实例
- * @property {string} name - 图片名称
- * @property {number} x - X 坐标位置
- * @property {number} y - Y 坐标位置
- * @property {number} scale - 缩放比例
- * @property {number} rotation - 旋转角度
- * @property {string} [blendMode] - 可选的混合模式
- * @property {number} [opacity] - 可选的透明度
- */
-export interface ImageObject {
-  id: string;
-  image: Image;
-  name: string;
-  x: number;
-  y: number;
-  scale: number;
-  rotation: number;
-  blendMode?: string;
-  opacity?: number;
-}
+import { ImageObject } from "../types/image";
 
 /**
  * 拖拽状态接口
@@ -271,22 +247,25 @@ export const useImageStore = create<ImageStore>()(
 
       handleDrag: (x, y, rect) => {
         const state = get();
-        if (!state.dragState.isDragging || !state.selectedImage) return;
+        if (!state.dragState.isDragging || !state.selectedImage) {
+          // console.log("no dragging or selected image");
+          return;
+        };
 
         // 计算新位置
-        const newX =
-          state.dragState.offsetX + (x - rect.left - state.dragState.startX);
-        const newY =
-          state.dragState.offsetY + (y - rect.top - state.dragState.startY);
+        const newX = state.dragState.offsetX + (x - rect.left - state.dragState.startX);
+        const newY = state.dragState.offsetY + (y - rect.top - state.dragState.startY);
 
-        // 先创建更新后的图层对象
         const updatedDraggingImage = {
           ...state.selectedImage,
           x: newX,
           y: newY,
         };
 
-        // 检查重叠（使用更新后的位置）
+        let hasOverlap = false;
+        let overlappingTarget = null;
+
+        // 检查重叠
         for (let i = state.images.length - 1; i >= 0; i--) {
           const targetImage = state.images[i];
           if (targetImage.id === updatedDraggingImage.id) continue;
@@ -295,33 +274,13 @@ export const useImageStore = create<ImageStore>()(
             state.checkOverlap(updatedDraggingImage, targetImage) &&
             state.checkSizeRatio(updatedDraggingImage, targetImage)
           ) {
-            if (!state.isOverlapping && state.onEnterOverlap) {
-              state.onEnterOverlap(updatedDraggingImage, targetImage);
-            } else if (state.isOverlapping && state.onDragInOverlap) {
-              // 在重叠状态下拖拽时触发
-              state.onDragInOverlap(updatedDraggingImage, targetImage);
-            }
-            set((state) => {
-              state.isOverlapping = true;
-              // 更新图层位置
-              state.images = state.images.map((img) => {
-                if (img.id === state.selectedImage?.id) {
-                  return updatedDraggingImage;
-                }
-                return img;
-              });
-            });
-            return;
+            hasOverlap = true;
+            overlappingTarget = targetImage;
+            break;
           }
         }
 
-        // 如果没有重叠
         set((state) => {
-          // 如果之前是重叠状态，现在不重叠了，触发离开重叠事件
-          if (state.isOverlapping && state.onLeaveOverlap) {
-            state.onLeaveOverlap();
-          }
-          state.isOverlapping = false;
           // 更新图层位置
           state.images = state.images.map((img) => {
             if (img.id === state.selectedImage?.id) {
@@ -329,6 +288,25 @@ export const useImageStore = create<ImageStore>()(
             }
             return img;
           });
+
+          if (hasOverlap && overlappingTarget) {
+            if (!state.isOverlapping && state.onEnterOverlap) {
+              // 首次进入重叠状态
+              state.onEnterOverlap(updatedDraggingImage, overlappingTarget);
+            } else if (state.isOverlapping && state.onDragInOverlap) {
+              // 在重叠状态下拖动
+              state.onDragInOverlap(updatedDraggingImage, overlappingTarget);
+            } else {
+              console.log("no overlap handler");
+            }
+            state.isOverlapping = true;
+          } else {
+            if (state.isOverlapping && state.onLeaveOverlap) {
+              // 离开重叠状态
+              state.onLeaveOverlap();
+            }
+            state.isOverlapping = false;
+          }
         });
       },
 
@@ -429,40 +407,57 @@ export const useImageStore = create<ImageStore>()(
       },
 
       // 检查重叠的辅助函数
-      checkOverlap: (topImage: ImageObject, bottomImage: ImageObject) => {
-        // 计算顶部图层的中心点
-        const centerX =
-          topImage.x + (topImage.image.width() * topImage.scale) / 2;
-        const centerY =
-          topImage.y + (topImage.image.height() * topImage.scale) / 2;
+      checkOverlap: (draggingImage: ImageObject, targetImage: ImageObject) => {
+        // // 添加调试日志
+        // console.log('Checking overlap:', {
+        //   dragging: {
+        //     name: draggingImage.name,
+        //     x: draggingImage.x,
+        //     y: draggingImage.y,
+        //     width: draggingImage.image.width(),
+        //     height: draggingImage.image.height(),
+        //     scale: draggingImage.scale
+        //   },
+        //   target: {
+        //     name: targetImage.name,
+        //     x: targetImage.x,
+        //     y: targetImage.y,
+        //     width: targetImage.image.width(),
+        //     height: targetImage.image.height(),
+        //     scale: targetImage.scale
+        //   }
+        // });
 
-        // 计算底部图层的边界
-        const bottomRect = {
-          left: bottomImage.x,
-          right: bottomImage.x + bottomImage.image.width() * bottomImage.scale,
-          top: bottomImage.y,
-          bottom:
-            bottomImage.y + bottomImage.image.height() * bottomImage.scale,
-        };
+        // 计算拖动图像的中心点
+        const dragCenterX = draggingImage.x + (draggingImage.image.width() * draggingImage.scale) / 2;
+        const dragCenterY = draggingImage.y + (draggingImage.image.height() * draggingImage.scale) / 2;
 
-        // 检查中心点是否在底部图层范围内
-        return (
-          centerX >= bottomRect.left &&
-          centerX <= bottomRect.right &&
-          centerY >= bottomRect.top &&
-          centerY <= bottomRect.bottom
+        // 计算目标图像的边界
+        const targetLeft = targetImage.x;
+        const targetRight = targetImage.x + targetImage.image.width() * targetImage.scale;
+        const targetTop = targetImage.y;
+        const targetBottom = targetImage.y + targetImage.image.height() * targetImage.scale;
+
+        // 检查中心点是否在目标图像内
+        const isOverlapping = (
+          dragCenterX >= targetLeft &&
+          dragCenterX <= targetRight &&
+          dragCenterY >= targetTop &&
+          dragCenterY <= targetBottom
         );
+
+        return isOverlapping;
       },
 
       // 检查尺寸比例
-      checkSizeRatio: (
-        img1: ImageObject,
-        img2: ImageObject,
-        threshold: number = 1.5
-      ) => {
-        const area1 = img1.image.width() * img1.image.height();
-        const area2 = img2.image.width() * img2.image.height();
-        return area1 <= area2 * threshold;
+      checkSizeRatio: (draggingImage: ImageObject, targetImage: ImageObject) => {
+        // 计算图像面积
+        const draggingArea = draggingImage.image.width() * draggingImage.image.height() * (draggingImage.scale ** 2);
+        const targetArea = targetImage.image.width() * targetImage.image.height() * (targetImage.scale ** 2);
+
+        // 检查拖动图像是否显著小于目标图像（例如小于70%）
+        const ratio = draggingArea / targetArea;
+        return ratio < 0.7;
       },
 
       // 设置重叠处理函数
@@ -549,10 +544,10 @@ export const useImageStore = create<ImageStore>()(
         for (let i = images.length - 1; i >= 0; i--) {
           const img = images[i];
           if (!img.image) continue;
-          
+
           const width = img.image.width() * (img.scale || 1);
           const height = img.image.height() * (img.scale || 1);
-          
+
           if (
             x >= img.x &&
             x <= img.x + width &&

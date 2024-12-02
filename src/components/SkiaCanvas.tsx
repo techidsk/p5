@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { BlendMode, CanvasKit } from "canvaskit-wasm";
+import type { CanvasKit } from "canvaskit-wasm";
 import { useCanvasKitStore } from "../store/canvasKitStore";
 import { useImageStore } from "../store/imageStore";
-import type { BLEND_MODES, ImageObject } from "../types/image";
+import type { BLEND_MODES, BlendModeName, ImageObject } from "../types/image";
 
 interface SkiaCanvasProps {
   canvasId: string;
-  onImageClick?: (image: ImageObject) => void;
+  onImageClick?: (image: ImageObject & { blendMode?: BlendModeName }) => void;
 }
 
 export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
@@ -33,10 +33,18 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
     handleWheel: handleWheelStore,
   } = useCanvasKitStore();
 
-  const { images, clearSelection, updateImageContent, findTopImageAtPoint } =
-    useImageStore();
+  const {
+    images,
+    clearSelection,
+    updateImageContent,
+    findTopImageAtPoint,
+    handleDrag,
+    startDragging,
+    stopDragging,
+    setOverlapHandlers,
+  } = useImageStore();
 
-  // 定义有效的混合模式字符串类型
+  // 定义有效的混合模字符串类型
   type BlendModeName = keyof typeof BLEND_MODES;
 
   const getBlendMode = (canvasKit: CanvasKit, mode: BlendModeName) => {
@@ -66,12 +74,18 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
         startY: adjustedY - hitImage.y,
         imageId: hitImage.id,
       };
-      onImageClick?.(hitImage);
+      console.log(hitImage);
+      const typedHitImage = {
+        ...hitImage,
+        blendMode: hitImage.blendMode as BlendModeName | undefined,
+      };
+      onImageClick?.(typedHitImage);
     } else {
       clearSelection();
     }
   };
 
+  // 移动鼠标
   const handleMouseMove = (e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -82,39 +96,26 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
     }
 
     if (dragState.current?.isDragging) {
+      // 更新图层位置
       const adjustedX = (e.clientX - rect.left - transform.x) / transform.scale;
       const adjustedY = (e.clientY - rect.top - transform.y) / transform.scale;
 
-      // 使用 requestAnimationFrame 优化性能
-      requestAnimationFrame(() => {
-        updateImageContent(dragState.current!.imageId, {
-          x: adjustedX - dragState.current!.startX,
-          y: adjustedY - dragState.current!.startY,
-        });
+      updateImageContent(dragState.current.imageId, {
+        x: adjustedX - dragState.current.startX,
+        y: adjustedY - dragState.current.startY,
       });
+
+      startDragging(adjustedX, adjustedY, rect);
+      // 添加重叠检测
+      handleDrag(adjustedX, adjustedY, rect);
     }
   };
 
   const handleMouseUp = () => {
     stopPanning();
     dragState.current = null;
+    stopDragging();
   };
-
-  // Handle resize
-  const handleResize = useCallback(() => {
-    if (canvasRef.current) {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-
-      const canvasKit = getCanvasKit();
-      if (!canvasKit) return;
-
-      canvasRef.current.width = width;
-      canvasRef.current.height = height;
-      resizeSurface(canvasId);
-      drawImages();
-    }
-  }, [canvasId, resizeSurface, getCanvasKit]);
 
   // Draw images
   const drawImages = useCallback(() => {
@@ -137,7 +138,9 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
       paint.setAlphaf(img.opacity || 1);
 
       if (img.blendMode) {
-        paint.setBlendMode(getBlendMode(canvasKit, img.blendMode as BlendModeName));
+        paint.setBlendMode(
+          getBlendMode(canvasKit, img.blendMode as BlendModeName)
+        );
       }
 
       canvas.drawImage(img.image, img.x, img.y, paint);
@@ -148,6 +151,22 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
     canvas.restore();
     surface.flush();
   }, [getActiveSurface, getCanvasKit, images, transform]);
+
+  // Handle resize
+  const handleResize = useCallback(() => {
+    if (canvasRef.current) {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      const canvasKit = getCanvasKit();
+      if (!canvasKit) return;
+
+      canvasRef.current.width = width;
+      canvasRef.current.height = height;
+      resizeSurface(canvasId);
+      drawImages();
+    }
+  }, [canvasId, resizeSurface, getCanvasKit, drawImages]);
 
   // Initialize CanvasKit
   useEffect(() => {
@@ -180,10 +199,10 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
     return () => window.removeEventListener("resize", handleResize);
   }, [handleResize]);
 
-  // Draw images when they change
+  // Draw images when they change or transform changes
   useEffect(() => {
     drawImages();
-  }, [drawImages]);
+  }, [drawImages, transform]);
 
   // Handle wheel events
   useEffect(() => {
@@ -202,6 +221,60 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
     canvas.addEventListener("wheel", wheelHandler, { passive: false });
     return () => canvas.removeEventListener("wheel", wheelHandler);
   }, [handleWheelStore]);
+
+  useEffect(() => {
+    return () => {
+      // 清理所有图像资源
+      images.forEach((img) => {
+        if (img.image && typeof img.image.delete === "function") {
+          img.image.delete();
+        }
+      });
+    };
+  }, []);
+
+  // 添加重叠状态的回调
+  useEffect(() => {
+    const handleEnterOverlap = (
+      draggingImage: ImageObject,
+      targetImage: ImageObject
+    ) => {
+      console.log("Enter overlap:", {
+        dragging: draggingImage.name,
+        target: targetImage.name,
+      });
+    };
+
+    const handleDragInOverlap = (
+      draggingImage: ImageObject,
+      targetImage: ImageObject
+    ) => {
+      console.log("Dragging in overlap:", {
+        dragging: draggingImage.name,
+        target: targetImage.name,
+      });
+    };
+
+    const handleLeaveOverlap = () => {
+      console.log("Leave overlap");
+    };
+
+    // 设置回调
+    setOverlapHandlers(
+      handleEnterOverlap,
+      handleDragInOverlap,
+      handleLeaveOverlap
+    );
+
+    // 清理回调
+    return () => {
+      setOverlapHandlers(
+        () => {},
+        () => {},
+        () => {}
+      );
+    };
+  }, [setOverlapHandlers]);
 
   return (
     <canvas

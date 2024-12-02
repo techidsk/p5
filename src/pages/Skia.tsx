@@ -13,10 +13,10 @@ export default function SkiaPage() {
         <div className="flex flex-col items-center justify-center relative z-20 pointer-events-none">
           <div className="pointer-events-auto">
             <h1 className="text-2xl font-bold mb-4">Skia 演示</h1>
-            <ExampleLoader canvasKit={getCanvasKit()} />
+            <ExampleLoader canvasKit={getCanvasKit() || undefined} />
           </div>
         </div>
-        
+
         <SkiaCanvas canvasId={CANVAS_ID} />
       </div>
 

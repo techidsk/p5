@@ -6,7 +6,7 @@ import { createImageFromUrl } from "../../utils/imageOperations";
 import imageList from "../../assets/mock/imageList.json";
 
 interface ExampleLoaderProps {
-  canvasKit: CanvasKit;
+  canvasKit?: CanvasKit;
 }
 
 export function ExampleLoader({ canvasKit }: ExampleLoaderProps) {
@@ -25,6 +25,9 @@ export function ExampleLoader({ canvasKit }: ExampleLoaderProps) {
         pattern: example.pattern,
         name: `示例 Mockup ${example.id}`,
       });
+      if (!canvasKit) {
+        throw new Error("CanvasKit is not initialized");
+      }
 
       const mainImage = await createImageFromUrl(example.main, canvasKit);
       addImage(mainImage, `${example.id}-main`);
@@ -42,4 +45,4 @@ export function ExampleLoader({ canvasKit }: ExampleLoaderProps) {
       加载示例
     </button>
   );
-} 
+}
