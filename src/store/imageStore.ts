@@ -10,7 +10,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
 import { applyDisplacement } from "../utils/displacement";
-import { ImageObject } from "../types/image";
+import { BlendModeName, ImageObject } from "../types/image";
 
 /**
  * 拖拽状态接口
@@ -73,7 +73,7 @@ interface ImageStore {
   handleImageClick: (x: number, y: number, rect: DOMRect) => boolean;
   /** 开始拖拽操作 */
   startDragging: (x: number, y: number, rect: DOMRect) => void;
-  /** 处理拖拽过程 */
+  /** 处理拖拽���程 */
   handleDrag: (x: number, y: number, rect: DOMRect) => void;
   /** 停止拖拽 */
   stopDragging: () => void;
@@ -113,16 +113,19 @@ interface ImageStore {
   isOverlapping: boolean; // 添加重叠状态追踪
   onEnterOverlap?: (dragging: ImageObject, target: ImageObject) => void; // 进入重叠回调
   onDragInOverlap?: (dragging: ImageObject, target: ImageObject) => void; // 新增
-  onLeaveOverlap?: () => void; // 离开重叠回调
+  onLeaveOverlap?: (dragging: ImageObject) => void; // 离开重叠回调
   setOverlapHandlers: (
     onEnter: (dragging: ImageObject, target: ImageObject) => void,
     onDragIn: (dragging: ImageObject, target: ImageObject) => void, // 新增
-    onLeave: () => void
+    onLeave: (dragging: ImageObject) => void
   ) => void;
 
   clearAllImages: () => void;
 
   findTopImageAtPoint: (x: number, y: number) => ImageObject | undefined;
+
+  canvasWidth: number;
+  canvasHeight: number;
 }
 
 /**
@@ -147,6 +150,8 @@ export const useImageStore = create<ImageStore>()(
         dispImage: null,
         maskImage: null,
       },
+      canvasHeight: 0,
+      canvasWidth: 0,
 
       addImage: (image, name) => {
         set((state) => {
@@ -159,6 +164,7 @@ export const useImageStore = create<ImageStore>()(
             scale: 1,
             rotation: 0,
             opacity: 1,
+            blendMode: "SrcOver" as BlendModeName,
           };
           state.images.push(newImage);
           state.selectedImage = newImage;
@@ -183,18 +189,33 @@ export const useImageStore = create<ImageStore>()(
 
       updateImageContent: (id, updates) => {
         set((state) => {
-          const image = state.images.find((img) => img.id === id);
-          if (image) {
-            Object.assign(image, updates);
-            if (state.selectedImage?.id === id) {
-              state.selectedImage = image;
+          // 更新 images 数组中的对象
+          state.images = state.images.map((img) => {
+            if (img.id === id) {
+              console.log({
+                id: img.id,
+                blendMode: img.blendMode,
+                updates,
+              });
+              const updatedImage = {
+                ...img,
+                ...updates,
+              };
+              // 同时更新 selectedImage
+              if (state.selectedImage?.id === id) {
+                state.selectedImage = updatedImage;
+              }
+
+              return updatedImage;
             }
-          }
+            return img;
+          });
         });
       },
 
       createDerivedImage: (image, name) => {
         set((state) => {
+          console.log("create derived image", name);
           state.images.push({
             id: crypto.randomUUID(),
             image,
@@ -250,11 +271,13 @@ export const useImageStore = create<ImageStore>()(
         if (!state.dragState.isDragging || !state.selectedImage) {
           // console.log("no dragging or selected image");
           return;
-        };
+        }
 
         // 计算新位置
-        const newX = state.dragState.offsetX + (x - rect.left - state.dragState.startX);
-        const newY = state.dragState.offsetY + (y - rect.top - state.dragState.startY);
+        const newX =
+          state.dragState.offsetX + (x - rect.left - state.dragState.startX);
+        const newY =
+          state.dragState.offsetY + (y - rect.top - state.dragState.startY);
 
         const updatedDraggingImage = {
           ...state.selectedImage,
@@ -280,30 +303,30 @@ export const useImageStore = create<ImageStore>()(
           }
         }
 
+        // 使用 immer 一次性更新所有状态
         set((state) => {
-          // 更新图层位置
-          state.images = state.images.map((img) => {
-            if (img.id === state.selectedImage?.id) {
-              return updatedDraggingImage;
-            }
-            return img;
-          });
+          // 直接更新选中图片的位置
+          state.selectedImage!.x = newX;
+          state.selectedImage!.y = newY;
 
+          // 更新图层数组中的位置
+          state.images = state.images.map((img) =>
+            img.id === state.selectedImage?.id
+              ? { ...img, x: newX, y: newY }
+              : img
+          );
+
+          // 处理重叠状态
           if (hasOverlap && overlappingTarget) {
             if (!state.isOverlapping && state.onEnterOverlap) {
-              // 首次进入重叠状态
               state.onEnterOverlap(updatedDraggingImage, overlappingTarget);
             } else if (state.isOverlapping && state.onDragInOverlap) {
-              // 在重叠状态下拖动
               state.onDragInOverlap(updatedDraggingImage, overlappingTarget);
-            } else {
-              console.log("no overlap handler");
             }
             state.isOverlapping = true;
-          } else {
-            if (state.isOverlapping && state.onLeaveOverlap) {
-              // 离开重叠状态
-              state.onLeaveOverlap();
+          } else if (state.isOverlapping) {
+            if (state.onLeaveOverlap) {
+              state.onLeaveOverlap(updatedDraggingImage);
             }
             state.isOverlapping = false;
           }
@@ -429,31 +452,45 @@ export const useImageStore = create<ImageStore>()(
         // });
 
         // 计算拖动图像的中心点
-        const dragCenterX = draggingImage.x + (draggingImage.image.width() * draggingImage.scale) / 2;
-        const dragCenterY = draggingImage.y + (draggingImage.image.height() * draggingImage.scale) / 2;
+        const dragCenterX =
+          draggingImage.x +
+          (draggingImage.image.width() * draggingImage.scale) / 2;
+        const dragCenterY =
+          draggingImage.y +
+          (draggingImage.image.height() * draggingImage.scale) / 2;
 
         // 计算目标图像的边界
         const targetLeft = targetImage.x;
-        const targetRight = targetImage.x + targetImage.image.width() * targetImage.scale;
+        const targetRight =
+          targetImage.x + targetImage.image.width() * targetImage.scale;
         const targetTop = targetImage.y;
-        const targetBottom = targetImage.y + targetImage.image.height() * targetImage.scale;
+        const targetBottom =
+          targetImage.y + targetImage.image.height() * targetImage.scale;
 
-        // 检查中心点是否在目标图像内
-        const isOverlapping = (
+        // 检查中心点否在目标图像内
+        const isOverlapping =
           dragCenterX >= targetLeft &&
           dragCenterX <= targetRight &&
           dragCenterY >= targetTop &&
-          dragCenterY <= targetBottom
-        );
+          dragCenterY <= targetBottom;
 
         return isOverlapping;
       },
 
       // 检查尺寸比例
-      checkSizeRatio: (draggingImage: ImageObject, targetImage: ImageObject) => {
+      checkSizeRatio: (
+        draggingImage: ImageObject,
+        targetImage: ImageObject
+      ) => {
         // 计算图像面积
-        const draggingArea = draggingImage.image.width() * draggingImage.image.height() * (draggingImage.scale ** 2);
-        const targetArea = targetImage.image.width() * targetImage.image.height() * (targetImage.scale ** 2);
+        const draggingArea =
+          draggingImage.image.width() *
+          draggingImage.image.height() *
+          draggingImage.scale ** 2;
+        const targetArea =
+          targetImage.image.width() *
+          targetImage.image.height() *
+          targetImage.scale ** 2;
 
         // 检查拖动图像是否显著小于目标图像（例如小于70%）
         const ratio = draggingArea / targetArea;
@@ -502,7 +539,7 @@ export const useImageStore = create<ImageStore>()(
 
         // 如果之前是重叠状态，现在不重叠了，触发离开重叠事件
         if (state.isOverlapping && state.onLeaveOverlap) {
-          state.onLeaveOverlap();
+          state.onLeaveOverlap(state.selectedImage);
         }
         set({ isOverlapping: false });
       },
@@ -513,7 +550,7 @@ export const useImageStore = create<ImageStore>()(
       setOverlapHandlers: (
         onEnter: (dragging: ImageObject, target: ImageObject) => void,
         onDragIn: (dragging: ImageObject, target: ImageObject) => void,
-        onLeave: () => void
+        onLeave: (dragging: ImageObject) => void
       ) => {
         set({
           onEnterOverlap: onEnter,

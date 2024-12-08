@@ -5,11 +5,12 @@ import { useImageStore } from "../store/imageStore";
 import type { BLEND_MODES, BlendModeName, ImageObject } from "../types/image";
 
 interface SkiaCanvasProps {
-  canvasId: string;
   onImageClick?: (image: ImageObject & { blendMode?: BlendModeName }) => void;
 }
 
-export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
+export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
+  const canvasId = "main-canvas";
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragState = useRef<{
     isDragging: boolean;
@@ -36,6 +37,7 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
   const {
     images,
     clearSelection,
+    selectImage,
     updateImageContent,
     findTopImageAtPoint,
     handleDrag,
@@ -74,7 +76,6 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
         startY: adjustedY - hitImage.y,
         imageId: hitImage.id,
       };
-      console.log(hitImage);
       const typedHitImage = {
         ...hitImage,
         blendMode: hitImage.blendMode as BlendModeName | undefined,
@@ -133,6 +134,8 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
     images.forEach((img) => {
       if (!img.image || !img.image.width) return;
 
+      console.log("绘制图片", img);
+
       canvas.save();
       const paint = new canvasKit.Paint();
       paint.setAlphaf(img.opacity || 1);
@@ -180,6 +183,7 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
         locateFile: (file) => `/node_modules/canvaskit-wasm/bin/${file}`,
       }).then((CK: CanvasKit) => {
         initialize(CK);
+        console.log("初始化主画布");
         if (canvasRef.current) {
           createSurface(
             canvasId,
@@ -190,7 +194,10 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
       });
     });
 
-    return () => cleanup();
+    return () => {
+      console.log("执行清理");
+      cleanup();
+    };
   }, [canvasId, initialize, createSurface, cleanup]);
 
   // Handle window resize
@@ -240,23 +247,40 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
       targetImage: ImageObject
     ) => {
       console.log("Enter overlap:", {
-        dragging: draggingImage.name,
-        target: targetImage.name,
+        dragging: draggingImage,
+        target: targetImage,
       });
+      // 保存当前的混合模式并切换为 multiply
+      updateImageContent(draggingImage.id, {
+        blendMode: "Multiply" as BlendModeName,
+      });
+      // 从 store 中获取最新状态
+      const currentImages = useImageStore.getState().images;
+      const updatedImage = useImageStore.getState().selectedImage;
+
+      console.log("updated image", updatedImage);
+      console.log("current images", currentImages);
     };
 
     const handleDragInOverlap = (
       draggingImage: ImageObject,
       targetImage: ImageObject
     ) => {
-      console.log("Dragging in overlap:", {
-        dragging: draggingImage.name,
-        target: targetImage.name,
-      });
+      // TODO 处理拖拽
+      //   console.log("Dragging in overlap:", {
+      //     dragging: draggingImage,
+      //     target: targetImage,
+      //   });
     };
 
-    const handleLeaveOverlap = () => {
-      console.log("Leave overlap");
+    const handleLeaveOverlap = (draggingImage: ImageObject) => {
+      // 恢复之前的混合模式
+      updateImageContent(draggingImage.id, {
+        blendMode: "SrcOver" as BlendModeName,
+      });
+      console.log("Leave overlap", {
+        dragging: draggingImage,
+      });
     };
 
     // 设置回调
@@ -274,7 +298,7 @@ export function SkiaCanvas({ canvasId, onImageClick }: SkiaCanvasProps) {
         () => {}
       );
     };
-  }, [setOverlapHandlers]);
+  }, [setOverlapHandlers, updateImageContent]);
 
   return (
     <canvas

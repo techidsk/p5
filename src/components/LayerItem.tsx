@@ -1,5 +1,5 @@
 import React from "react";
-import type { ImageObject } from "../store/imageStore";
+import type { ImageObject } from "../types/image";
 
 // 混合模式选项
 export const BLEND_MODES = {
