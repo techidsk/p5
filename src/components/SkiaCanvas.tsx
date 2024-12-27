@@ -5,12 +5,20 @@ import { useImageStore } from "../store/imageStore";
 import type { BLEND_MODES, BlendModeName, ImageObject } from "../types/image";
 
 interface SkiaCanvasProps {
-  onImageClick?: (image: ImageObject & { blendMode?: BlendModeName }) => void;
+  projectId: string;
+  surfaceId: string;
+  width: number;
+  height: number;
+  isMiniCanvas?: boolean;
 }
 
-export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
-  const canvasId = "main-canvas";
-
+export function SkiaCanvas({
+  projectId,
+  surfaceId,
+  width,
+  height,
+  isMiniCanvas = false
+}: SkiaCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragState = useRef<{
     isDragging: boolean;
@@ -22,16 +30,16 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
   const {
     initialize,
     createSurface,
-    resizeSurface,
-    getActiveSurface,
+    getSurface,
     getCanvasKit,
     cleanup,
-    transform,
-    isPanning,
     startPanning,
     updatePanning,
     stopPanning,
-    handleWheel: handleWheelStore,
+    handleWheel,
+    isPanning,
+    getTransform,
+    deleteSurface,
   } = useCanvasKitStore();
 
   const {
@@ -60,12 +68,12 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
     if (!rect) return;
 
     if (e.button === 1) {
-      startPanning(e.clientX, e.clientY);
+      startPanning(projectId, e.clientX, e.clientY);
       return;
     }
 
-    const adjustedX = (e.clientX - rect.left - transform.x) / transform.scale;
-    const adjustedY = (e.clientY - rect.top - transform.y) / transform.scale;
+    const adjustedX = (e.clientX - rect.left - getTransform(projectId).x) / getTransform(projectId).scale;
+    const adjustedY = (e.clientY - rect.top - getTransform(projectId).y) / getTransform(projectId).scale;
 
     const hitImage = findTopImageAtPoint(adjustedX, adjustedY);
 
@@ -76,11 +84,6 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
         startY: adjustedY - hitImage.y,
         imageId: hitImage.id,
       };
-      const typedHitImage = {
-        ...hitImage,
-        blendMode: hitImage.blendMode as BlendModeName | undefined,
-      };
-      onImageClick?.(typedHitImage);
     } else {
       clearSelection();
     }
@@ -91,15 +94,15 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    if (isPanning) {
-      updatePanning(e.clientX, e.clientY);
+    if (isPanning(projectId)) {
+      updatePanning(projectId, e.clientX, e.clientY);
       return;
     }
 
     if (dragState.current?.isDragging) {
       // 更新图层位置
-      const adjustedX = (e.clientX - rect.left - transform.x) / transform.scale;
-      const adjustedY = (e.clientY - rect.top - transform.y) / transform.scale;
+      const adjustedX = (e.clientX - rect.left - getTransform(projectId).x) / getTransform(projectId).scale;
+      const adjustedY = (e.clientY - rect.top - getTransform(projectId).y) / getTransform(projectId).scale;
 
       updateImageContent(dragState.current.imageId, {
         x: adjustedX - dragState.current.startX,
@@ -113,14 +116,14 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
   };
 
   const handleMouseUp = () => {
-    stopPanning();
+    stopPanning(projectId);
     dragState.current = null;
     stopDragging();
   };
 
   // Draw images
   const drawImages = useCallback(() => {
-    const surface = getActiveSurface();
+    const surface = getSurface(projectId, surfaceId);
     const canvasKit = getCanvasKit();
     if (!surface || !canvasKit) return;
 
@@ -128,8 +131,8 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
     canvas.clear(canvasKit.TRANSPARENT);
 
     canvas.save();
-    canvas.translate(transform.x, transform.y);
-    canvas.scale(transform.scale, transform.scale);
+    canvas.translate(getTransform(projectId).x, getTransform(projectId).y);
+    canvas.scale(getTransform(projectId).scale, getTransform(projectId).scale);
 
     images.forEach((img) => {
       if (!img.image || !img.image.width) return;
@@ -153,7 +156,7 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
 
     canvas.restore();
     surface.flush();
-  }, [getActiveSurface, getCanvasKit, images, transform]);
+  }, [getSurface, getCanvasKit, images, getTransform, projectId, surfaceId]);
 
   // Handle resize
   const handleResize = useCallback(() => {
@@ -166,39 +169,38 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
 
       canvasRef.current.width = width;
       canvasRef.current.height = height;
-      resizeSurface(canvasId);
+      
+      // 删除旧的 surface 并创建新的
+      deleteSurface(projectId, surfaceId);
+      createSurface(projectId, surfaceId, width, height);
       drawImages();
     }
-  }, [canvasId, resizeSurface, getCanvasKit, drawImages]);
+  }, [projectId, surfaceId, createSurface, deleteSurface, getCanvasKit, drawImages]);
 
   // Initialize CanvasKit
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    canvasRef.current.width = window.innerWidth;
-    canvasRef.current.height = window.innerHeight;
-
-    import("canvaskit-wasm").then(({ default: CanvasKitInit }) => {
-      CanvasKitInit({
-        locateFile: (file) => `/node_modules/canvaskit-wasm/bin/${file}`,
-      }).then((CK: CanvasKit) => {
-        initialize(CK);
-        console.log("初始化主画布");
-        if (canvasRef.current) {
-          createSurface(
-            canvasId,
-            canvasRef.current.width,
-            canvasRef.current.height
-          );
-        }
+    // 只在主画布时初始化 CanvasKit
+    if (!isMiniCanvas) {
+      import("canvaskit-wasm").then(({ default: CanvasKitInit }) => {
+        CanvasKitInit({
+          locateFile: (file) => `/node_modules/canvaskit-wasm/bin/${file}`,
+        }).then((CK: CanvasKit) => {
+          initialize(CK);
+          createSurface(projectId, surfaceId, width, height);
+        });
       });
-    });
+    } else {
+      createSurface(projectId, surfaceId, width, height);
+    }
 
     return () => {
-      console.log("执行清理");
-      cleanup();
+      if (!isMiniCanvas) {
+        cleanup();
+      }
     };
-  }, [canvasId, initialize, createSurface, cleanup]);
+  }, [projectId, surfaceId, width, height, isMiniCanvas]);
 
   // Handle window resize
   useEffect(() => {
@@ -209,7 +211,7 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
   // Draw images when they change or transform changes
   useEffect(() => {
     drawImages();
-  }, [drawImages, transform]);
+  }, [drawImages, getTransform]);
 
   // Handle wheel events
   useEffect(() => {
@@ -222,12 +224,14 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
       const clientX = e.clientX - rect.left;
       const clientY = e.clientY - rect.top;
 
-      handleWheelStore(e.deltaY, e.ctrlKey, clientX, clientY);
+      handleWheel(projectId, e.deltaY, e.ctrlKey, clientX, clientY);
     };
 
-    canvas.addEventListener("wheel", wheelHandler, { passive: false });
-    return () => canvas.removeEventListener("wheel", wheelHandler);
-  }, [handleWheelStore]);
+    if (!isMiniCanvas) {
+      canvas.addEventListener("wheel", wheelHandler, { passive: false });
+      return () => canvas.removeEventListener("wheel", wheelHandler);
+    }
+  }, [projectId, isMiniCanvas]);
 
   useEffect(() => {
     return () => {
@@ -303,7 +307,7 @@ export function SkiaCanvas({ onImageClick }: SkiaCanvasProps) {
   return (
     <canvas
       ref={canvasRef}
-      id={canvasId}
+      id={surfaceId}
       style={{ width: "100%", height: "100%" }}
       className="fixed top-0 left-0"
       onMouseDown={handleMouseDown}

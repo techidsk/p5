@@ -5,6 +5,7 @@ import { useCanvasKitStore } from "../store/canvasKitStore";
 import type { BlendModeName } from "../types/image";
 
 interface MiniCanvasProps {
+  projectId: string;
   width: number;
   height: number;
   className?: string;
@@ -16,25 +17,34 @@ interface Position {
 }
 
 const COLORS = [
-  "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4",
-  "#FFEEAD", "#D4A5A5", "#9B59B6", "#3498DB",
-  "#E67E22", "#2ECC71",
+  "#FF6B6B",
+  "#4ECDC4",
+  "#45B7D1",
+  "#96CEB4",
+  "#FFEEAD",
+  "#D4A5A5",
+  "#9B59B6",
+  "#3498DB",
+  "#E67E22",
+  "#2ECC71",
 ];
 
-export function MiniCanvas({ width, height, className = "" }: MiniCanvasProps) {
+export function MiniCanvas({
+  projectId,
+  width,
+  height,
+  className = "",
+}: MiniCanvasProps) {
   const { images, canvasWidth, canvasHeight } = useImageStore();
   const [position, setPosition] = useState<Position>({ x: 20, y: 20 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStartPos = useRef<Position>({ x: 0, y: 0 });
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const {
-    initialize,
-    createSurface,
-    getActiveSurface,
-    getCanvasKit,
-    cleanup,
-  } = useCanvasKitStore();
+  const { initialize, createSurface, getSurface, getCanvasKit, cleanup } =
+    useCanvasKitStore();
+
+  const surfaceId = `mini-canvas-${projectId}`;
 
   // 计算缩放比例
   const scale = useMemo(() => {
@@ -79,7 +89,7 @@ export function MiniCanvas({ width, height, className = "" }: MiniCanvasProps) {
 
   // 绘制画布内容
   const drawImages = useCallback(() => {
-    const surface = getActiveSurface();
+    const surface = getSurface(projectId, surfaceId);
     const canvasKit = getCanvasKit();
     if (!surface || !canvasKit || !canvasRef.current) return;
 
@@ -95,12 +105,14 @@ export function MiniCanvas({ width, height, className = "" }: MiniCanvasProps) {
 
       canvas.save();
       const paint = new canvasKit.Paint();
-      
+
       if (img.blendMode) {
         const blendMode = canvasKit.BlendMode[img.blendMode as BlendModeName];
-        paint.setBlendMode("value" in blendMode ? blendMode : canvasKit.BlendMode.Src);
+        paint.setBlendMode(
+          "value" in blendMode ? blendMode : canvasKit.BlendMode.Src
+        );
       }
-      
+
       paint.setAlphaf(img.opacity || 1);
       canvas.drawImage(img.image, img.x, img.y, paint);
       paint.delete();
@@ -109,24 +121,31 @@ export function MiniCanvas({ width, height, className = "" }: MiniCanvasProps) {
 
     canvas.restore();
     surface.flush();
-  }, [getActiveSurface, getCanvasKit, images, scale]);
+  }, [getSurface, getCanvasKit, images, scale, projectId, surfaceId]);
 
   // 初始化 CanvasKit
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    const miniCanvasId = "mini-canvas";
+    const surfaceId = `mini-canvas-${projectId}`;
     canvasRef.current.width = displayWidth;
     canvasRef.current.height = displayHeight;
 
-    createSurface(miniCanvasId, displayWidth, displayHeight);
+    createSurface(projectId, surfaceId, displayWidth, displayHeight);
     drawImages();
 
     return () => {
-        console.log("执行清理");
-        cleanup();
-      };
-  }, [displayWidth, displayHeight, createSurface, cleanup, drawImages]);
+      console.log("执行清理");
+      cleanup();
+    };
+  }, [
+    projectId,
+    displayWidth,
+    displayHeight,
+    createSurface,
+    cleanup,
+    drawImages,
+  ]);
 
   // 当图片或变换更新时重绘
   useEffect(() => {

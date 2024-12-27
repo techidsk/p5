@@ -1,17 +1,21 @@
 import { create } from "zustand";
+import type { CanvasKit, Surface } from "canvaskit-wasm";
 import { immer } from "zustand/middleware/immer";
 import { enableMapSet } from "immer";
-import type { CanvasKit, Surface } from "canvaskit-wasm";
-
 // 启用 MapSet 支持
 enableMapSet();
 
-// 在 store 外部存储 CanvasKit 实例和 surfaces
-const instances = {
-  canvasKit: null as CanvasKit | null,
-  surfaces: new Map<string, Surface>(),
-  activeSurfaceId: null as string | null,
-};
+interface Project {
+  id: string;
+  name: string;
+  canvasKit: CanvasKit | null;
+  canvasWidth: number;
+  canvasHeight: number;
+  surfaces: Map<string, Surface>;
+  transform: CanvasTransform;
+  isPanning: boolean;
+  lastPanPosition: { x: number; y: number };
+}
 
 interface CanvasTransform {
   x: number;
@@ -20,232 +24,253 @@ interface CanvasTransform {
 }
 
 interface CanvasKitStore {
-  // 状态
-  activeSurfaceId: string | null;
+  // CanvasKit 实例
+  canvasKit: CanvasKit | null;
+  // 项目管理
+  projects: Map<string, Project>;
+  activeProjectId: string | null;
+
+  // 基础状态
   isInitialized: boolean;
   isLoading: boolean;
   error: Error | null;
-  transform: CanvasTransform;
-  isPanning: boolean;
-  lastPanPosition: { x: number; y: number };
 
   // Actions
   initialize: (canvasKit: CanvasKit) => void;
-  createSurface: (id: string, width: number, height: number) => Surface | null;
-  deleteSurface: (id: string) => void;
-  setActiveSurface: (id: string) => void;
   cleanup: () => void;
-  resizeSurface: (id: string) => void;
-  getActiveSurface: () => Surface | null;
+
+  // 项目相关操作
+  createProject: (
+    id: string,
+    name: string,
+    width: number,
+    height: number
+  ) => void;
+  setActiveProject: (projectId: string) => void;
+  deleteProject: (projectId: string) => void;
+
+  // Surface 相关操作
+  createSurface: (
+    projectId: string,
+    surfaceId: string,
+    width: number,
+    height: number
+  ) => Surface | null;
+  deleteSurface: (projectId: string, surfaceId: string) => void;
+  getSurface: (projectId: string, surfaceId: string) => Surface | null;
+
+  // Transform 相关操作
+  getProjectTransform: (projectId: string) => CanvasTransform;
+  updateProjectTransform: (
+    projectId: string,
+    transform: Partial<CanvasTransform>
+  ) => void;
+
+  // 工具方法
   getCanvasKit: () => CanvasKit | null;
-  updateTransform: (transform: Partial<CanvasTransform>) => void;
-  /**
-   * 开始画布平移操作
-   * @param x - 鼠标按下时的 X 坐标（相对于视口）
-   * @param y - 鼠标按下时的 Y 坐标（相对于视口）
-   * @description 
-   * 1. 记录当前鼠标位置作为平移的起始点
-   * 2. 设置 isPanning 状态为 true，表示开始平移操作
-   * 3. 通常在鼠标按下(mousedown)事件中调用
-   * 
-   * @example
-   * // 在组件中使用
-   * const handleMouseDown = (e: MouseEvent) => {
-   *   startPanning(e.clientX, e.clientY);
-   * };
-   */
-  startPanning: (x: number, y: number) => void;
-  updatePanning: (x: number, y: number) => void;
-  stopPanning: () => void;
-  handleWheel: (deltaY: number, isCtrlPressed: boolean, clientX: number, clientY: number) => void;
+
+  // 画布操作相关
+  startPanning: (projectId: string, x: number, y: number) => void;
+  updatePanning: (projectId: string, x: number, y: number) => void;
+  stopPanning: (projectId: string) => void;
+  handleWheel: (
+    projectId: string,
+    deltaY: number,
+    isCtrlPressed: boolean,
+    clientX: number,
+    clientY: number
+  ) => void;
+  isPanning: (projectId: string) => boolean;
+  getTransform: (projectId: string) => CanvasTransform;
 }
 
 export const useCanvasKitStore = create<CanvasKitStore>()(
   immer<CanvasKitStore>((set, get) => ({
-    // 初始状态
-    activeSurfaceId: null,
+    canvasKit: null,
+    projects: new Map(),
+    activeProjectId: null,
     isInitialized: false,
     isLoading: false,
     error: null,
-    transform: { x: 0, y: 0, scale: 1 },
-    isPanning: false,
-    lastPanPosition: { x: 0, y: 0 },
 
-    // 初始化 CanvasKit
     initialize: (canvasKit: CanvasKit) => {
-      console.log("Initializing CanvasKit");
-      instances.canvasKit = canvasKit;
       set((state) => {
+        const project = state.projects.get(state.activeProjectId!);
+        if (project) {
+          project.canvasKit = canvasKit;
+        }
         state.isInitialized = true;
-        state.isLoading = false;
-        state.error = null;
       });
     },
 
-    // 创建新的 Surface
-    createSurface: (id: string, width: number, height: number) => {
-      if (!instances.canvasKit) {
-        console.error("CanvasKit not initialized");
-        set((state) => {
-          state.error = new Error("CanvasKit not initialized");
-        });
-        return null;
-      }
+    createSurface: (projectId, surfaceId, width, height) => {
+      const project = get().projects.get(projectId);
+      if (!project?.canvasKit) return null;
 
       try {
-        const canvas = document.getElementById(id) as HTMLCanvasElement;
-        if (!canvas) {
-          throw new Error(`Canvas element with id ${id} not found`);
-        }
+        const canvas = document.getElementById(surfaceId) as HTMLCanvasElement;
+        if (!canvas) return null;
 
-        // 清理已存在的 surface
-        const existingSurface = instances.surfaces.get(id);
-        if (existingSurface) {
-          existingSurface.delete();
-        }
+        const surface = project.canvasKit.MakeWebGLCanvasSurface(canvas);
+        if (!surface) return null;
 
-        // 设置画布尺寸
-        canvas.width = width;
-        canvas.height = height;
-
-        const surface = instances.canvasKit.MakeWebGLCanvasSurface(canvas);
-        if (!surface) {
-          throw new Error("Failed to create surface");
-        }
-
-        instances.surfaces.set(id, surface);
         set((state) => {
-          if (!state.activeSurfaceId) {
-            state.activeSurfaceId = id;
+          const project = state.projects.get(projectId);
+          if (project) {
+            project.surfaces.set(surfaceId, surface);
           }
         });
-        instances.activeSurfaceId = id;
+
         return surface;
       } catch (error) {
         console.error("Error creating surface:", error);
-        set((state) => {
-          state.error = error as Error;
-        });
         return null;
       }
     },
 
-    // 删除指定的 Surface
-    deleteSurface: (id: string) => {
-      const surface = instances.surfaces.get(id);
+    createProject: (id, name, width, height) => {
+      set((state) => {
+        state.projects.set(id, {
+          id,
+          name,
+          canvasKit: null,
+          canvasWidth: width,
+          canvasHeight: height,
+          surfaces: new Map(),
+          transform: { x: 0, y: 0, scale: 1 },
+          isPanning: false,
+          lastPanPosition: { x: 0, y: 0 },
+        });
+        if (!state.activeProjectId) {
+          state.activeProjectId = id;
+        }
+      });
+    },
 
+    cleanup: () => {
+      const state = get();
+      state.projects.forEach((project) => {
+        project.surfaces.forEach((surface) => surface.delete());
+      });
+      set({ projects: new Map(), canvasKit: null, activeProjectId: null });
+    },
+
+    setActiveProject: (projectId) => set({ activeProjectId: projectId }),
+
+    deleteProject: (projectId) => {
+      const state = get();
+      const project = state.projects.get(projectId);
+      if (project) {
+        project.surfaces.forEach((surface) => surface.delete());
+        const newProjects = new Map(state.projects);
+        newProjects.delete(projectId);
+        set({ projects: newProjects });
+      }
+    },
+
+    deleteSurface: (projectId, surfaceId) => {
+      const state = get();
+      const surface = state.projects.get(projectId)?.surfaces.get(surfaceId);
       if (surface) {
         surface.delete();
-        instances.surfaces.delete(id);
-        if (instances.activeSurfaceId === id) {
-          instances.activeSurfaceId =
-            instances.surfaces.size > 0
-              ? Array.from(instances.surfaces.keys())[0]
-              : null;
-        }
+        const newProjects = new Map(state.projects);
+        newProjects.get(projectId)?.surfaces.delete(surfaceId);
+        set({ projects: newProjects });
       }
     },
 
-    // 设置活动 Surface
-    setActiveSurface: (id: string) => {
-      if (instances.surfaces.has(id)) {
-        instances.activeSurfaceId = id;
+    getSurface: (projectId, surfaceId) =>
+      get().projects.get(projectId)?.surfaces.get(surfaceId) || null,
+
+    getProjectTransform: (projectId) =>
+      get().projects.get(projectId)?.transform || { x: 0, y: 0, scale: 1 },
+
+    updateProjectTransform: (projectId, transform) => {
+      const state = get();
+      const project = state.projects.get(projectId);
+      if (project) {
+        const newProjects = new Map(state.projects);
+        newProjects.set(projectId, {
+          ...project,
+          transform: { ...project.transform, ...transform },
+        });
+        set({ projects: newProjects });
       }
     },
 
-    // 清理所有资源
-    cleanup: () => {
-      console.log("Cleaning up");
-      // 清理所有 surfaces
-      instances.surfaces.forEach((surface) => {
-        surface.delete();
-      });
-
-      instances.surfaces.clear();
-      instances.activeSurfaceId = null;
-      instances.canvasKit = null;
-    },
-
-    // 调整 Surface 大小
-    resizeSurface: (id: string) => {
-      const surface = instances.surfaces.get(id);
-
-      if (surface && instances.canvasKit) {
-        surface.delete();
-        const newSurface = instances.canvasKit.MakeWebGLCanvasSurface(id);
-        if (newSurface) {
-          instances.surfaces.set(id, newSurface);
-        }
+    startPanning: (projectId, x, y) => {
+      const state = get();
+      const project = state.projects.get(projectId);
+      if (project) {
+        const newProjects = new Map(state.projects);
+        newProjects.set(projectId, {
+          ...project,
+          isPanning: true,
+          lastPanPosition: { x, y },
+        });
+        set({ projects: newProjects });
       }
     },
 
-    // 获取当前活动的 Surface
-    getActiveSurface: () => {
-      if (!instances.activeSurfaceId) {
-        console.error("No active surface");
-        return null;
+    updatePanning: (projectId, x, y) => {
+      const state = get();
+      const project = state.projects.get(projectId);
+      if (project?.isPanning) {
+        const dx = x - project.lastPanPosition.x;
+        const dy = y - project.lastPanPosition.y;
+        const newProjects = new Map(state.projects);
+        newProjects.set(projectId, {
+          ...project,
+          transform: {
+            ...project.transform,
+            x: project.transform.x + dx,
+            y: project.transform.y + dy,
+          },
+          lastPanPosition: { x, y },
+        });
+        set({ projects: newProjects });
       }
-      return instances.surfaces.get(instances.activeSurfaceId) || null;
     },
 
-    // 获取 CanvasKit 实例
-    getCanvasKit: () => {
-      return instances.canvasKit;
+    stopPanning: (projectId) => {
+      const state = get();
+      const project = state.projects.get(projectId);
+      if (project) {
+        const newProjects = new Map(state.projects);
+        newProjects.set(projectId, { ...project, isPanning: false });
+        set({ projects: newProjects });
+      }
     },
 
-    // 新增 actions
-    updateTransform: (newTransform) => {
-      set(state => {
-        Object.assign(state.transform, newTransform);
-      });
+    handleWheel: (projectId, deltaY, isCtrlPressed, clientX, clientY) => {
+      const state = get();
+      const project = state.projects.get(projectId);
+      if (!project) return;
+
+      const newProjects = new Map(state.projects);
+      const transform = { ...project.transform };
+
+      if (isCtrlPressed) {
+        const scaleFactor = 1 - deltaY * 0.001;
+        const oldScale = transform.scale;
+        transform.scale = Math.max(0.1, Math.min(10, oldScale * scaleFactor));
+        const mouseX = clientX - transform.x;
+        const mouseY = clientY - transform.y;
+        transform.x += mouseX - (mouseX * transform.scale) / oldScale;
+        transform.y += mouseY - (mouseY * transform.scale) / oldScale;
+      } else {
+        transform.y -= deltaY;
+      }
+
+      newProjects.set(projectId, { ...project, transform });
+      set({ projects: newProjects });
     },
 
-    startPanning: (x, y) => {
-      set(state => {
-        state.isPanning = true;
-        state.lastPanPosition = { x, y };
-      });
-    },
+    isPanning: (projectId) => get().projects.get(projectId)?.isPanning || false,
 
-    updatePanning: (x, y) => {
-      set(state => {
-        if (state.isPanning) {
-          const dx = x - state.lastPanPosition.x;
-          const dy = y - state.lastPanPosition.y;
-          state.transform.x += dx;
-          state.transform.y += dy;
-          state.lastPanPosition = { x, y };
-        }
-      });
-    },
+    getTransform: (projectId) =>
+      get().projects.get(projectId)?.transform || { x: 0, y: 0, scale: 1 },
 
-    stopPanning: () => {
-      set(state => {
-        state.isPanning = false;
-      });
-    },
-
-    handleWheel: (deltaY: number, isCtrlPressed: boolean, clientX: number, clientY: number) => {
-      set(state => {
-        if (isCtrlPressed) {
-          // 缩放因子：deltaY 为正时缩小，为负时放大
-          const scaleFactor = 1 - deltaY * 0.001;
-          const oldScale = state.transform.scale;
-          const newScale = Math.max(0.1, Math.min(10, oldScale * scaleFactor)); // 限制缩放范围
-
-          // 计算鼠标位置相对于画布原点的偏移
-          const mouseX = clientX - state.transform.x;
-          const mouseY = clientY - state.transform.y;
-
-          // 更新缩放和位置，保持鼠标指向的点不变
-          state.transform.scale = newScale;
-          state.transform.x += mouseX - (mouseX * newScale / oldScale);
-          state.transform.y += mouseY - (mouseY * newScale / oldScale);
-        } else {
-          // 普通的平移
-          state.transform.y -= deltaY;
-        }
-      });
-    },
+    getCanvasKit: () => get().canvasKit,
   }))
 );

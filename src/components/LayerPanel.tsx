@@ -5,7 +5,11 @@ import { useRef, useState } from "react";
 import { Plus, Trash2, RotateCcw, ChevronRight } from "lucide-react";
 import { BLEND_MODES, BlendModeName } from "../types/image";
 
-export function LayerPanel() {
+interface LayerPanelProps {
+  projectId: string;
+}
+
+export function LayerPanel({ projectId }: LayerPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { getCanvasKit } = useCanvasKitStore();
